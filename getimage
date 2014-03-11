@@ -1,0 +1,23 @@
+#!/bin/perl
+
+use File::Basename;
+use LWP::MediaTypes;
+use LWP::UserAgent;
+
+if($#ARGV != 0) {
+	die "Usage: ", basename($0), " <image url>\n";
+}
+my $image = $ARGV[0];
+
+# imgur album
+if($image =~ /imgur\.com\/a\/([^\#\?]*)/i) {
+    print "Downloading imgur album ", $1, "...\n";
+    system("imgur-album $1");
+# (insert more handlers here)
+} else {
+# fallback to trying the direct link
+    print "Downloading direct link (may download HTML if the site ignores Accept headers)\n";
+    my $ua = LWP::UserAgent->new;
+    $ua->default_header('Accept' => join(', ', media_suffix('image/*')));
+    $ua->mirror($image, basename($image));
+}
