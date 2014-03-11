@@ -1,0 +1,66 @@
+#!/bin/perl
+
+
+use strict;
+use warnings;
+use File::Basename;
+use LWP::Simple;
+use HTML::TreeBuilder;
+use HTML::Element;
+
+if($#ARGV != 0) {
+	die "Usage: ", basename($0), " <thread url>\n";
+}
+
+my $thread = $ARGV[0];
+my $page = get($thread) or die "Couldn't reach host (or invalid URL)!";
+$thread =~ s/http\:\/\/[^\/]*\///;
+$thread =~ s/\/res\//\:/;
+mkdir($thread);
+chdir($thread) or die "$!";
+
+my $tree = HTML::TreeBuilder->new();
+$tree->parse($page);
+$tree->eof;
+
+my @files = $tree->look_down(
+	'_tag'  => 'div',
+	'class' => 'fileText',
+);
+
+my $currentFile = undef;
+
+$SIG{'INT'} = sub {
+	print "\n";
+	if(defined $currentFile) {
+		print "Removing partially downloaded file: ", $currentFile, "\n";
+		unlink($currentFile);
+	}
+	print "... Exiting\n";
+	exit 0;
+};
+
+my $i = 1;
+foreach (@files) {
+	# print $_->as_HTML(), "\n";
+	my @images = $_->find('a');
+	my @titleNodes = $_->find('span');
+	my $image = "http:" .  $images[0]->attr('href');
+	# try to get the title attribute if it's set (provides the full title in case it was long)
+	my $title = $titleNodes[0]->attr('title');
+	# if the title tag wasn't set, get the text (always set)
+	if(!defined $title || length($title) == 0) {
+		$title = $titleNodes[0]->as_text;
+	}
+	# get the id of the image to disambiguate image names
+	$image =~ /\/([^\/\.]*)\.[^\/\.]*$/i;
+	$title = $1 . "-" . $title;
+	print "(", $i++, "/", $#files + 1, ") ", $title, "\n";
+	unless(-e $title) {
+		$currentFile = $title;
+		getstore($image, $title);
+		$currentFile = undef;
+	}
+}
+
+$tree->delete

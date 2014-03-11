@@ -1,0 +1,40 @@
+#!/bin/bash
+
+if [[ -f $1 ]]; then
+	file=$1
+else
+	file=$(echo "`xdg-user-dir PICTURES`/Screenshot from `date +"%Y-%m-%d %T"`.png")
+
+	case "$1" in
+		"a" | "area" )
+			gnome-screenshot -a -f "$file"
+			;;
+		"w" | "window" )
+			gnome-screenshot -w -f "$file"
+			;;
+		"" )
+			gnome-screenshot -f "$file"
+			;;
+		* )
+			file=$*
+			;;
+	esac
+fi
+
+echo $file
+
+. $(dirname $0)/imgur-auth.sh
+
+# upload the image
+response=$(curl -s -H "Authorization: Bearer $access_token" -F "image=@$file" https://api.imgur.com/3/image)
+if [ $? -ne 0 ]; then
+	echo "Upload failed" >&2
+elif [ $(echo $response | grep -c "<error_msg>") -gt 0 ]; then
+	echo "Error message from imgur:" >&2
+	echo $response | sed -r 's/.*<error_msg>(.*)<\/error_msg>.*/\1/' >&2
+else
+	echo "$response"
+	# parse the response and output our stuff
+	url=$(echo $response | grep -o 'link":"[^"]*' | awk -F':"' '{print $2}' | sed -r 's/[\\]+//g')
+	xdg-open $url
+fi

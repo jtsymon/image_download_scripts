@@ -1,0 +1,67 @@
+#!/bin/perl
+
+
+use strict;
+use warnings;
+use File::Basename;
+use LWP::Simple;
+use HTML::TreeBuilder;
+use HTML::Element;
+use XML::FeedPP;
+use Term::ReadKey;
+
+if($#ARGV != 0) {
+	die "Usage: ", basename($0), " <username>\n";
+}
+
+print "Press q to exit\n";
+
+my $sub = $ARGV[0];
+my $dir = "subreddit:" . $sub;
+mkdir($dir);
+chdir($dir) or die $!;
+my $url = "http://reddit.com/r/" . $sub . "/.rss";
+my $last_after = "";
+my $after = "";
+my $currentFile;
+
+ReadMode 3;
+my $exit = 0;
+
+my $page = $url;
+
+until($exit) {
+    $page = XML::FeedPP->new($page) or die "Couldn't reach host (or invalid URL)!";
+    
+    foreach($page->get_item()) {
+        my $key = ReadKey(-1);
+        if(defined $key && $key eq 'q') {
+            $exit = 1;
+            last;
+        }
+        if($_->link =~ /comments\/([^\/]*)/i) {
+            $after = $1;
+        }
+        my $desc = HTML::TreeBuilder->new();
+        $desc->parse($_->description);
+        $desc->eof;
+        if(defined $desc->find_by_tag_name('img')) {
+            my ($link) = $desc->look_down(sub {
+                $_[0]->as_text eq "[link]";
+            });
+            print $after, ":\t", $link->attr('href'), "\n";
+            system('getimage', $link->attr('href'));
+        }
+        $desc->delete;
+    }
+
+    if($after eq $last_after) {
+        last;
+    }
+    $page = $url . "?after=t3_" . $after;
+    $last_after = $after;
+}
+
+ReadMode 0;
+
+exit 0;
