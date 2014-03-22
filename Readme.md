@@ -1,4 +1,4 @@
-image_download_scripts
+image_scripts
 ========
 
 scripts for downloading images from imgur albums, 4chan threads, reddit user submissions, subreddit pages.
