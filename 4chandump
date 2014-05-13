@@ -5,31 +5,25 @@ use strict;
 use warnings;
 use File::Basename;
 use LWP::Simple;
-use HTML::TreeBuilder;
-use HTML::Element;
+use JSON;
+use Data::Dumper;
 
-if($#ARGV != 0) {
-	die "Usage: ", basename($0), " <thread url>\n";
+if($#ARGV != 1) {
+	die "Usage: ", basename($0), " <board> <thread url>\n";
 }
 
-my $thread = $ARGV[0];
-my $page = get($thread) or die "Couldn't reach host (or invalid URL)!";
-$thread =~ s/http\:\/\/[^\/]*\///;
-$thread =~ s/\/res\//\:/;
-mkdir($thread);
-chdir($thread) or die "$!";
+my $board   = $ARGV[0];
+my $thread  = $ARGV[1];
 
-my $tree = HTML::TreeBuilder->new();
-$tree->parse($page);
-$tree->eof;
+my $page = get("http://a.4cdn.org/${board}/thread/${thread}.json") or die "Couldn't reach host (or invalid URL)!";
 
-my @files = $tree->look_down(
-	'_tag'  => 'div',
-	'class' => 'fileText',
-);
+my $dir = "${board}:${thread}";
+mkdir($dir);
+chdir($dir) or die "$!";
+
+my @posts = @{(from_json($page))->{'posts'}};
 
 my $currentFile = undef;
-
 $SIG{'INT'} = sub {
 	print "\n";
 	if(defined $currentFile) {
@@ -41,26 +35,19 @@ $SIG{'INT'} = sub {
 };
 
 my $i = 1;
-foreach (@files) {
-	# print $_->as_HTML(), "\n";
-	my @images = $_->find('a');
-	my @titleNodes = $_->find('span');
-	my $image = "http:" .  $images[0]->attr('href');
-	# try to get the title attribute if it's set (provides the full title in case it was long)
-	my $title = $titleNodes[0]->attr('title');
-	# if the title tag wasn't set, get the text (always set)
-	if(!defined $title || length($title) == 0) {
-		$title = $titleNodes[0]->as_text;
-	}
-	# get the id of the image to disambiguate image names
-	$image =~ /\/([^\/\.]*)\.[^\/\.]*$/i;
-	$title = $1 . "-" . $title;
-	print "(", $i++, "/", $#files + 1, ") ", $title, "\n";
-	unless(-e $title) {
-		$currentFile = $title;
-		getstore($image, $title);
-		$currentFile = undef;
-	}
+my $n = (scalar @posts) + 1;
+foreach(@posts) {
+    my $tim     = $_->{'tim'};
+    my $ext     = $_->{'ext'};
+    my $fname   = $_->{'filename'};
+    unless(defined $tim and defined $ext and defined $fname) {
+        print "(", $i++, "/", $n, ") [no file posted]\n";
+        next;
+    }
+    my $url     = "http://i.4cdn.org/${board}/${tim}${ext}";
+    my $file    = sprintf("%03d - %s%s", $i, $fname, $ext);
+	print "(", $i++, "/", $n, ") ", $file, "\n";
+    $currentFile = $file;
+    getstore($url, $file);
+    $currentFile = undef;
 }
-
-$tree->delete
