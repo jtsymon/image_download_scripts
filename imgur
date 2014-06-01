@@ -1,40 +1,287 @@
-#!/bin/bash
+#!/usr/bin/env perl 
+use strict;
+use warnings;
+use utf8;
+use File::Basename;
+use JSON;
+use File::Copy;
+use LWP::Simple;
+use LWP::UserAgent;
+use HTTP::Request::Common;
+use Data::Dumper;
 
-if [[ -f $1 ]]; then
-	file=$1
-else
-	file=$(echo "`xdg-user-dir PICTURES`/Screenshot from `date +"%Y-%m-%d %T"`.png")
+my $API_URL     = "https://api.imgur.com/";
+my $CONFIG_FILE = $ENV{"HOME"} . "/.imgur_config";
+my $CLIENT_ID;
+my $CLIENT_SECRET;
+my $REFRESH_TOKEN;
+my $ACCESS_TOKEN;
 
-	case "$1" in
-		"a" | "area" )
-			gnome-screenshot -a -f "$file"
-			;;
-		"w" | "window" )
-			gnome-screenshot -w -f "$file"
-			;;
-		"" )
-			gnome-screenshot -f "$file"
-			;;
-		* )
-			file=$*
-			;;
-	esac
-fi
+my $name = basename($0);
 
-echo $file
+my $ua;
 
-. $(dirname $0)/imgur-auth.sh
+sub error {
+    my $response = shift;
+    my $message = shift;
+    my $json = decode_json($response->decoded_content);
+    my $error = $json->{'data'}->{'error'};
+    if(defined($error)) {
+        $error = "\nImgur said: '" . $error . "'";
+    } else {
+        $error = "";
+    }
+    unless(defined($message)) {
+        if($response->code == 400) {
+            $message = "Error 400 (invalid parameter)";
+        } elsif($response->code == 401) {
+            $message = "Error 401 (authentication required)";
+        } elsif($response->code == 403) {
+            $message = "Error 403 (forbidden - possibly incorrect authentication)";
+        } elsif($response->code == 404) {
+            $message = "Error 404 (not found)";
+        } elsif($response->code == 500) {
+            $message = "Error 500 (internal server error)";
+        }
+    }
+    if(defined($message)) {
+        die $message . $error . "\n";
+    } else {
+        die "Error code " . $response->code . " connecting to imgur" . $error . "\n";
+    }
+}
 
-# upload the image
-response=$(curl -s -H "Authorization: Bearer $access_token" -F "image=@$file" https://api.imgur.com/3/image)
-if [ $? -ne 0 ]; then
-	echo "Upload failed" >&2
-elif [ $(echo $response | grep -c "<error_msg>") -gt 0 ]; then
-	echo "Error message from imgur:" >&2
-	echo $response | sed -r 's/.*<error_msg>(.*)<\/error_msg>.*/\1/' >&2
-else
-	echo "$response"
-	# parse the response and output our stuff
-	url=$(echo $response | grep -o 'link":"[^"]*' | awk -F':"' '{print $2}' | sed -r 's/[\\]+//g')
-	xdg-open $url
-fi
+sub API_broken {
+    die "Imgur returned success but we didn't get the updated tokens!\nMaybe the API was changed?\n";
+};
+
+sub update_config {
+    open my $fh, ">", $CONFIG_FILE;
+    print $fh JSON->new->utf8->pretty->encode({
+        client_id => $CLIENT_ID,
+        client_secret => $CLIENT_SECRET,
+        refresh_token => $REFRESH_TOKEN,
+        access_token => $ACCESS_TOKEN
+    });
+    close $fh;
+}
+
+sub generate_config {
+    $CLIENT_ID = "";
+    $CLIENT_SECRET = "";
+    $REFRESH_TOKEN = "AUTO GENERATED";
+    $ACCESS_TOKEN = $REFRESH_TOKEN;
+    update_config;
+}
+
+sub refresh_acccess {
+    my $response = $ua->request(POST $API_URL . "oauth2/token",
+        Content => [
+            client_id => $CLIENT_ID,
+            client_secret => $CLIENT_SECRET,
+            refresh_token => $REFRESH_TOKEN,
+            grant_type => 'refresh_token'
+        ]);
+    unless($response->is_success) {
+        error $response;
+    }
+    my $json = decode_json($response->decoded_content);
+    unless(defined($json->{'refresh_token'}) && defined($json->{'access_token'})) {
+        API_broken;
+    }
+    $REFRESH_TOKEN = $json->{'refresh_token'};
+    $ACCESS_TOKEN = $json->{'access_token'};
+    update_config;
+}
+
+my %actions = (
+    auth => [
+        1,
+        sub {
+            unless($#ARGV == 0) {
+                die "Usage: " . $name . " auth\n";
+            }
+            my $url = $API_URL. "oauth2/authorize?client_id=" . $CLIENT_ID . "&response_type=pin";
+            print "Visit this URL to get an authorisation pin:\n" . $url . "\nEnter the pin here: ";
+            my $pin = <STDIN>;
+            chomp($pin);
+            my $response = $ua->request(POST $API_URL . "oauth2/token",
+                Content => [
+                    Client_id => $CLIENT_ID,
+                    client_secret => $CLIENT_SECRET,
+                    pin => $pin,
+                    grant_type => 'pin'
+                ]);
+            unless($response->is_success) {
+                error $response;
+            }
+            my $json = decode_json($response->decoded_content);
+            unless(defined($json->{'refresh_token'}) && defined($json->{'access_token'})) {
+                API_broken;
+            }
+            $REFRESH_TOKEN = $json->{'refresh_token'};
+            $ACCESS_TOKEN = $json->{'access_token'};
+            update_config;
+        }
+    ],
+    upload => [
+        2,
+        sub {
+            unless($#ARGV == 1) {
+                die "Usage: " . $name . " upload <file>\n";
+            }
+            my $request = POST $API_URL . "3/image",
+                Authorization => "Bearer " . $ACCESS_TOKEN,
+                'Content-Type' => "form-data",
+                Content => [
+                    image => [ $ARGV[1] ]
+                ];
+            my $response = $ua->request($request);
+            unless($response->is_success) {
+                # try updating refresh token and trying again
+                refresh_acccess;
+                $response = $ua->request($request);
+                unless($response->is_success) {
+                    error $response;
+                }
+            }
+            my $json = decode_json($response->decoded_content);
+            my $link = $json->{'data'}->{'link'};
+            if(defined($link)) {
+                system('xdg-open', $link);
+            } else {
+                API_broken;
+            }
+        }
+    ],
+    upload_anon => [
+        0,
+        sub {
+            unless($#ARGV == 1) {
+                die "Usage: " . $name . " upload_anon <file>\n";
+            }
+            my $response = $ua->request(POST $API_URL . "3/image",
+                Authorization => "Client-ID " . $CLIENT_ID,
+                'Content-Type' => "form-data",
+                Content => [
+                    image => [ $ARGV[1] ]
+                ]);
+            unless($response->is_success) {
+                error $response;
+            }
+            my $json = decode_json($response->decoded_content);
+            my $link = $json->{'data'}->{'link'};
+            if(defined($link)) {
+                system('xdg-open', $link);
+            } else {
+                API_broken;
+            }
+        }
+    ],
+    album => [
+        0,
+        sub {
+            unless($#ARGV == 1) {
+                die "Usage: " . $name . " album <id>\n";
+            }
+            my $request = GET $API_URL . "3/album/" . $ARGV[1] . "/images",
+                Authorization => "Client-ID " . $CLIENT_ID;
+            my $response = $ua->request($request);
+            unless($response->is_success) {
+                # try updating refresh token and trying again
+                refresh_acccess;
+                $response = $ua->request($request);
+                unless($response->is_success) {
+                    error $response;
+                }
+            }
+            my $json = decode_json($response->decoded_content);
+            mkdir($ARGV[1]);
+            chdir($ARGV[1]);
+            
+            my $currentFile;
+
+            $SIG{'INT'} = sub {
+                print "\n";
+                if(defined $currentFile) {
+                    print "Removing partially downloaded file: ", $currentFile, "\n";
+                    unlink($currentFile);
+                }
+                print "... Exiting\n";
+                exit 0;
+            };
+            
+            my @images = @{$json->{'data'}};
+            my $i = 1;
+            my $n = scalar(@images);
+
+            foreach(@images) {
+                my $link = $_->{'link'};
+                my $file = $_->{'title'};
+                if(!defined($file) || $file =~ /^[\s]*$/) {
+                    $file = $_->{'id'};
+                } else {
+                    $file = $file . "-" . $_->{'id'};
+                }
+                $file .= '.' . ($link =~ m/([^.]+)$/)[0];
+                print "(", $i++, "/", $n, ") ", $file, "\n";
+                $currentFile = $file;
+                mirror($link, $file);
+                $currentFile = undef;
+            }
+        }
+    ]
+);
+my $usage = "Usage: " . $name . " <action> [options]
+Actions:
+    auth                Authorises the app for your imgur account
+    upload      <file>  Uploads <file> to your imgur account, returns the link
+    upload_anon <file>  Uploads <file> anonymously, returns the link
+    album       <album> Downloads all files in an album into a directory\n";
+
+
+# print usage if not given args
+unless($#ARGV >= 0 && exists($actions{$ARGV[0]})) {
+    die $usage;
+}
+$ua = LWP::UserAgent->new;
+my ($auth_level, $action) = @{$actions{$ARGV[0]}};
+# load config
+{
+    # Enable 'slurp' mode (reads the whole file at once)
+    local $/;
+    my ($fh, $json);
+    # try to open the config file
+    unless(open $fh, "<", $CONFIG_FILE) {
+        generate_config;
+        die "Expected config in " . $CONFIG_FILE . "\n    (created a template)\n";
+    };
+    # try to read the config file as json
+    eval {
+        $json = decode_json(<$fh>);
+    };
+    if($@) {
+        move($CONFIG_FILE, $CONFIG_FILE . ".backup");
+        generate_config;
+        die "Encountered an error in " . $CONFIG_FILE . "\n    (renamed to " . $CONFIG_FILE . ".backup, and created a template)\n";
+    }
+    close $fh;
+    $CLIENT_ID       = $json->{'client_id'};
+    $CLIENT_SECRET   = $json->{'client_secret'};
+    $REFRESH_TOKEN   = $json->{'refresh_token'};
+    $ACCESS_TOKEN   = $json->{'access_token'};
+}
+unless(defined($CLIENT_ID) && length($CLIENT_ID) > 0) {
+    die "Please fill out the client_id in the config file at  " . $CONFIG_FILE . "\n";
+}
+if($auth_level > 0) {
+    unless(defined($CLIENT_SECRET) && length($CLIENT_SECRET) > 0) {
+        die "Please fill out the client_secret in the config file at  " . $CONFIG_FILE . "\n";
+    }
+    if($auth_level > 1) {
+        unless(defined($ACCESS_TOKEN) && length($ACCESS_TOKEN) > 0 && defined($REFRESH_TOKEN) && length($REFRESH_TOKEN) > 0) {
+            die "Please run `" . $name . " auth`\n";
+        }
+    }
+}
+&$action;
