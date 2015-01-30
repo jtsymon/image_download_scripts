@@ -12,7 +12,7 @@ my $image = $ARGV[0];
 # imgur album
 if($image =~ /imgur\.com\/a\/([^\#\?]*)/i) {
     print "Downloading imgur album ", $1, "...\n";
-    system("imgur-album $1");
+    system("imgur album $1");
 # (insert more handlers here)
 } else {
 # fallback to trying the direct link
