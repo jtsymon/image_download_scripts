@@ -48,6 +48,6 @@ foreach(@posts) {
     my $file    = sprintf("%03d - %s%s", $i, $fname, $ext);
 	print "(", $i++, "/", $n, ") ", $file, "\n";
     $currentFile = $file;
-    getstore($url, $file);
+    mirror($url, $file);
     $currentFile = undef;
 }
