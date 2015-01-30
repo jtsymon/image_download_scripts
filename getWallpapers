@@ -1,0 +1,64 @@
+#!/bin/bash
+
+###
+### The following variables may be modified to control this script
+###
+	# Categories to download
+		# anime, abstract, animals, astronomy, computers,
+		# crafted-nature, gaming, celebrities, industrial,
+		# macabre, microscopic, music, nature,
+		# popular-culture, science-fiction, sports, vehicles
+	cats="anime"
+	# How many pages to download (starting from the front page)
+	pages="5"
+	# Width of the images to download (of both monitors combined - it MUST be a width supported by the website)
+	width="3840"
+	# Height of the images to download (it MUST be a height supported by the website)
+	height="1080"
+	# Enable NSFW images (yes|no)
+	nsfw="no"
+	# Where to put the files? (they'll be placed in folders named after their category, within this folder)
+	dir="~/Pictures/Wallpapers"
+	# How many instances of wget running simultaneously to download the images
+	workers="8"
+###
+### Anything below this point should not need to be modified
+###
+
+trap ctrl_c INT # trap ctrl-c so we can still exit while xargs is running (I don't think I actually checked if this works)
+
+function ctrl_c() {
+	echo -e "\nexiting"
+	exit 0
+}
+
+set -f
+
+cd $dir
+
+IFS=", "
+for cat in $cats; do
+	queue=""
+	echo -en "\r[${cat}] - generating queue...\033[0K"
+	for (( p=1; p<=$pages; p++ )); do # parse the page(s) and generate a queue of images to download
+		images=$(curl -b "EnableNSFW=${nsfw}" --request GET "dualmonitorbackgrounds.com/${cat}/page/${p}?userwidth=${width}&userheight=${height}" 2>/dev/null | grep -v "<h3>" | grep -o "[^/]*\.jpg\.php" | grep -o "^[^.]*")
+		echo "$images"
+		IFS='
+'
+		images=($images)
+		for (( i=0; i<${#images[@]}; i++ )); do
+			images[$i]="http://www.dualmonitorbackgrounds.com/cache/${cat}/${images[$i]}_w${width}_h${height}_cw${width}_ch${height}.jpg"
+		done
+		queue="${queue}
+${images[*]}" # append the images to the queue
+	done
+	echo "$queue"
+	echo -en "\r[${cat}] - downloading images...\033[0K"
+	mkdir "$cat" 2> /dev/null # make sure the category's folder exists
+	cd "$cat"
+	echo "$queue" | xargs -n 1 -P $workers wget -nc -q # download the images
+	cd $dir
+	echo -e "\r[${cat}] - done!\033[0K"
+done
+unset IFS
+echo "Finished!"
