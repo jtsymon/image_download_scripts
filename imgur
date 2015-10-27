@@ -74,7 +74,7 @@ sub generate_config {
     update_config;
 }
 
-sub refresh_acccess {
+sub refresh_access {
     my $response = $ua->request(POST $API_URL . "oauth2/token",
         Content => [
             client_id => $CLIENT_ID,
@@ -98,7 +98,7 @@ my %actions = (
     auth => [
         1,
         sub {
-            unless($#ARGV == 0) {
+            unless($#_ == -1) {
                 die "Usage: " . $name . " auth\n";
             }
             my $url = $API_URL. "oauth2/authorize?client_id=" . $CLIENT_ID . "&response_type=pin";
@@ -127,24 +127,23 @@ my %actions = (
     upload => [
         2,
         sub {
-            unless($#ARGV == 1) {
+            unless($#_ == 0) {
                 die "Usage: " . $name . " upload <file>\n";
             }
-            my $request = POST $API_URL . "3/image",
-                Authorization => "Bearer " . $ACCESS_TOKEN,
-                'Content-Type' => "form-data",
-                Content => [
-                    image => [ $ARGV[1] ]
-                ];
-            my $response = $ua->request($request);
-            unless($response->is_success) {
-                # try updating refresh token and trying again
-                refresh_acccess;
+            my $try = 2;
+            my $response;
+            while ($try --> 0) {
+                my $request = POST $API_URL . "3/image",
+                    Authorization => "Bearer " . $ACCESS_TOKEN,
+                    'Content-Type' => "form-data",
+                    Content => [
+                        image => [ $_[0] ]
+                    ];
                 $response = $ua->request($request);
-                unless($response->is_success) {
-                    error $response;
-                }
+                last if $response->is_success;
+                refresh_access;
             }
+            error $response unless($response->is_success);
             my $json = decode_json($response->decoded_content);
             my $link = $json->{'data'}->{'link'};
             if(defined($link)) {
@@ -157,14 +156,14 @@ my %actions = (
     upload_anon => [
         0,
         sub {
-            unless($#ARGV == 1) {
+            unless($#_ == 0) {
                 die "Usage: " . $name . " upload_anon <file>\n";
             }
             my $response = $ua->request(POST $API_URL . "3/image",
                 Authorization => "Client-ID " . $CLIENT_ID,
                 'Content-Type' => "form-data",
                 Content => [
-                    image => [ $ARGV[1] ]
+                    image => [ $_[0] ]
                 ]);
             unless($response->is_success) {
                 error $response;
@@ -181,23 +180,27 @@ my %actions = (
     album => [
         0,
         sub {
-            unless($#ARGV == 1) {
-                die "Usage: " . $name . " album <id>\n";
+            unless($#_ == 1 or $#_ == 2) {
+                die "Usage: " . $name . " album <id> [output]\n";
             }
-            my $request = GET $API_URL . "3/album/" . $ARGV[1] . "/images",
+            my ($src, $dst) = @_;
+            unless (defined $dst) {
+                $dst = $src;
+            }
+            my $request = GET $API_URL . "3/album/" . $src . "/images",
                 Authorization => "Client-ID " . $CLIENT_ID;
             my $response = $ua->request($request);
             unless($response->is_success) {
                 # try updating refresh token and trying again
-                refresh_acccess;
+                refresh_access;
                 $response = $ua->request($request);
                 unless($response->is_success) {
                     error $response;
                 }
             }
             my $json = decode_json($response->decoded_content);
-            mkdir($ARGV[1]);
-            chdir($ARGV[1]);
+            mkdir($dst);
+            chdir($dst);
             
             my $currentFile;
 
@@ -239,13 +242,14 @@ Actions:
     upload_anon <file>  Uploads <file> anonymously, returns the link
     album       <album> Downloads all files in an album into a directory\n";
 
+my $action = shift @ARGV;
 
 # print usage if not given args
-unless($#ARGV >= 0 && exists($actions{$ARGV[0]})) {
+unless($#ARGV >= -1 && exists($actions{$action})) {
     die $usage;
 }
 $ua = LWP::UserAgent->new;
-my ($auth_level, $action) = @{$actions{$ARGV[0]}};
+my ($auth_level, $sub) = @{$actions{$action}};
 # load config
 {
     # Enable 'slurp' mode (reads the whole file at once)
@@ -284,4 +288,4 @@ if($auth_level > 0) {
         }
     }
 }
-&$action;
+&$sub(@ARGV);
