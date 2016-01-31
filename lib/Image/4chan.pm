@@ -18,7 +18,7 @@ sub new {
         {
             board  => $board,
             thread => $thread,
-            i      => 0
+            done   => 0
         },
         $class
     );
@@ -28,7 +28,6 @@ sub new {
 sub handle_post {
     my $self = shift;
 
-    $self->{i}++;
     my $no      = $_->{no};
     my $tim     = $_->{tim};
     my $ext     = $_->{ext};
@@ -47,6 +46,10 @@ sub get_dir {
 
 sub get_files {
     my $self = shift;
+
+    return () if $self->{done};
+
+    $self->{done} = 1;
 
     my $page = get("http://a.4cdn.org/" . $self->{board} . "/thread/" . $self->{thread} . ".json")
         or die "Couldn't reach host (or invalid URL)!";
