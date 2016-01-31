@@ -4,20 +4,32 @@ use File::Basename;
 use LWP::MediaTypes;
 use LWP::UserAgent;
 
-if($#ARGV != 0) {
-	die "Usage: ", basename($0), " <image url>\n";
+unless($#ARGV == 0 or $#ARGV == 1) {
+	die "Usage: ", basename($0), " <image url> [output]\n";
 }
-my $image = $ARGV[0];
 
-# imgur album
-if($image =~ /imgur\.com\/a\/([^\#\?]*)/i) {
-    print "Downloading imgur album ", $1, "...\n";
-    system("imgur album $1");
-# (insert more handlers here)
-} else {
-# fallback to trying the direct link
-    print "Downloading direct link (may download HTML if the site ignores Accept headers)\n";
+my ($src, $dst) = @ARGV;
+unless (defined $dst) {
+    $dst = basename($src);
+}
+$dst =~ s/\//-/g;
+
+for ($src) {
+    # imgur album
+    /imgur\.com\/a\/([^\#\?]*)/i && do {
+        print "Downloading imgur album ", $1, "...\n";
+        system 'imgur', 'album', $1, $dst;
+        last;
+    };
+    # gfycat image page
+    /gfycat.com\/([^\.]*)$/i && do {
+        print "Downloading gfycat ", $1, "...\n";
+        $_ = "http://giant.gfycat.com/$1.webm";
+    };
+    # (insert more handlers here)
+    # fallback to trying the direct link
+    print "Downloading $_\n";
     my $ua = LWP::UserAgent->new;
     $ua->default_header('Accept' => join(', ', media_suffix('image/*')));
-    $ua->mirror($image, basename($image));
+    $ua->mirror($_, $dst);
 }
