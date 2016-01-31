@@ -3,33 +3,75 @@
 use File::Basename;
 use LWP::MediaTypes;
 use LWP::UserAgent;
+use Cwd 'abs_path';
+
+use lib dirname(abs_path($0)) . '/lib';
+
+use Image::4chan;
+use Image::tumblr;
 
 unless($#ARGV == 0 or $#ARGV == 1) {
 	die "Usage: ", basename($0), " <image url> [output]\n";
 }
 
 my ($src, $dst) = @ARGV;
-unless (defined $dst) {
-    $dst = basename($src);
-}
-$dst =~ s/\//-/g;
+
+my $handler = undef;
 
 for ($src) {
     # imgur album
     /imgur\.com\/a\/([^\#\?]*)/i && do {
         print "Downloading imgur album ", $1, "...\n";
-        system 'imgur', 'album', $1, $dst;
+        exec 'imgur', 'album', $1, $dst;
+    };
+    /4chan\.org\/([^\/]+)\/thread\/([^#]+)/i && do {
+        $handler = Image::4chan->new($1, $2);
+        last;
+    };
+    /([^\/]+)\.tumblr\.com/i && do {
+        $handler = Image::tumblr->new($1);
         last;
     };
     # gfycat image page
     /gfycat.com\/([^\.]*)$/i && do {
-        print "Downloading gfycat ", $1, "...\n";
-        $_ = "http://giant.gfycat.com/$1.webm";
+        $src = "http://giant.gfycat.com/$1.webm";
     };
     # (insert more handlers here)
     # fallback to trying the direct link
+}
+my $ua = LWP::UserAgent->new;
+$ua->default_header('Accept' => join(', ', media_suffix('image/*')));
+if (defined $handler) {
+    $dst = $handler->get_dir;
+    mkdir $dst;
+    chdir $dst or die $!;
+    my $currentFile = undef;
+    $SIG{'INT'} = sub {
+        print "\n";
+        if(defined $currentFile) {
+            print "Removing partially downloaded file: ", $currentFile, "\n";
+            unlink($currentFile);
+        }
+        print "... Exiting\n";
+        exit 0;
+    };
+    while (1) {
+        @files = $handler->get_files;
+        last if scalar @files == 0;
+        foreach(@files) {
+            next if $_ == undef;
+            my ($url, $file) = @{$_};
+            print $url, ":", $file, "\n";
+            $currentFile = $file;
+            $ua->mirror($url, $file);
+            $currentFile = undef;
+        }
+    }
+} else {
+    unless (defined $dst) {
+        $dst = basename($src);
+    }
+    $dst =~ s/\//-/g;
     print "Downloading $_\n";
-    my $ua = LWP::UserAgent->new;
-    $ua->default_header('Accept' => join(', ', media_suffix('image/*')));
-    $ua->mirror($_, $dst);
+    $ua->mirror($src, $dst);
 }
