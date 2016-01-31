@@ -1,14 +1,17 @@
 #!/bin/perl
 
-
 use strict;
 use warnings;
+use utf8;
+
 use File::Basename;
 use LWP::Simple;
 use HTML::TreeBuilder;
 use HTML::Element;
 use XML::FeedPP;
 use Term::ReadKey;
+use Date::Parse;
+use Time::Format qw(time_strftime);
 
 if($#ARGV != 0) {
 	die "Usage: ", basename($0), " <username>\n";
@@ -42,21 +45,17 @@ until($exit) {
         if($_->link =~ /comments\/([^\/]*)/i) {
             $after = $1;
         }
+
+        my $time = str2time($_->pubDate);
+        my $title = time_strftime('%Y-%m-%d %T', $time) . " " . $_->title;
         my $desc = HTML::TreeBuilder->new();
         $desc->parse($_->description);
         $desc->eof;
         my ($link) = $desc->look_down(sub {
             $_[0]->as_text eq "[link]";
         });
-        print $after, ":\t", $link->attr('href'), "\n";
-        my $pid = fork();
-        unless(defined $pid) {
-            die "Failed to fork\n";
-        }
-        unless($pid) {
-            exec('getimage', $link->attr('href'));
-        }
-        while(wait() != -1) {};
+        print 'getimage', ' ', $link->attr('href'), ' ', $title, "\n";
+        system 'getimage', $link->attr('href'), $title;
         
         $desc->delete;
     }
