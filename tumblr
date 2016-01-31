@@ -1,0 +1,70 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use utf8;
+
+use LWP::Simple;
+use JSON;
+use Data::Dumper;
+use File::Basename;
+
+my $n = 1;
+
+my @sizes = (
+    1280,
+    500,
+    400,
+    250,
+    100,
+    75
+);
+
+my $currentFile = undef;
+$SIG{'INT'} = sub {
+    print "\n";
+    if (defined $currentFile) {
+        print "Removing partially downloaded file: ", $currentFile, "\n";
+        unlink $currentFile;
+    }
+    print "... Exiting\n";
+    exit 0;
+};
+
+sub get_photo {
+    my $hash = shift;
+
+    for my $size (@sizes) {
+        if (exists $hash->{"photo-url-$size"}) {
+            my $image = $hash->{"photo-url-$size"};
+            print "Getting $image\n";
+            $currentFile = basename $image;
+            mirror($image, $currentFile);
+            $currentFile = undef;
+            return;
+        }
+    }
+    print "Failed to get $hash->{url}\n";
+}
+
+foreach my $page (@ARGV) {
+    my $url = "http://$page.tumblr.com/api/read/json?type=photo&filter=text&num=$n";
+    my $i = 0;
+    while (1) {
+        my $page = get "$url&start=$i" or die $!;
+        my ($json) = ($page =~ /(\{.*\})/);
+        my @posts = @{from_json($json)->{posts}};
+        last if scalar @posts == 0;
+        foreach my $post (@posts) {
+            if (exists $post->{photos} and scalar @{$post->{photos}} > 0) {
+                foreach my $photo (@{$post->{photos}}) {
+                    get_photo $photo;
+                }
+            } else {
+                get_photo $post;
+            }
+        }
+        $i += $n;
+    }
+}
+# jq -r '.posts[]."photo-url-1280"' |\
